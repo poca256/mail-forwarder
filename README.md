@@ -11,16 +11,73 @@ A simple multi-account IMAP mail forwarder written in Python.
 - ログローテーション（5MB × 5世代）
 - Python標準ライブラリのみ使用
 
+---
+
+## 動作要件
+
+- Python **3.8 以上**
+- IMAP over SSL 対応サーバー
+- SMTP（SSL または STARTTLS）対応サーバー
+
+本ソフトウェアは Python 標準ライブラリのみを使用しています。  
+追加のパッケージインストールは不要です。
+
+---
+
 ## 動作確認環境
 
 - IMAPサーバー：mineo
 - SMTPサーバー：アサヒネット
 
+※ 他のプロバイダでも、一般的な IMAP over SSL および SMTP（SSL / STARTTLS）環境であれば動作可能です。
+
+---
+
+## 実行方法
+
+### 1. 設定ファイルを作成
+
+cp config.sample.json config.json
+
+config.json を編集し、IMAP・SMTP情報を設定してください。
+
+### 2. スクリプトを実行
+
+python3 mail_forward.py
+
+初回実行時は既存メールを転送せず、最新UIDのみ保存します。  
+2回目以降は新着メールのみ転送されます。
+
+---
+
+## cron による定期実行例
+
+6時間ごとに実行する場合：
+
+0 */6 * * * cd /home/username/mail-forwarder && /usr/bin/python3 mail_forward.py > /dev/null 2>&1
+
+### 説明
+
+- 0 */6 * * * → 6時間ごとに実行（0時・6時・12時・18時）
+- /usr/bin/python3 → Pythonの絶対パス
+- > /dev/null 2>&1 → cron のメール通知を抑制
+
+※ 環境に応じてパスを変更してください。
+
+---
+
 ## 注意事項
 
-- メール送信元アドレスは config.json で指定した from_address になります
+- メール送信元アドレスは config.json で指定した smtp.from_address になります
+- 元メールの差出人は本文および Reply-To ヘッダーに記載されます
 - config.json は公開しないでください
+- サーバー上では適切なファイルパーミッションを設定してください
+
+chmod 600 config.json
+
+---
 
 ## ライセンス
 
-MIT License
+MIT License  
+Copyright (c) 2026 ポカリ
