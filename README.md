@@ -54,13 +54,12 @@ python3 mail_forward.py
 
 6時間ごとに実行する場合：
 
-0 */6 * * * cd /home/username/mail-forwarder && /usr/bin/python3 mail_forward.py > /dev/null 2>&1
+0 */6 * * * (cd /home/username/mail-forwarder && /usr/bin/python3 mail_forward.py) > /dev/null 2>&1
 
 ### 説明
 
 - 0 */6 * * * → 6時間ごとに実行（0時・6時・12時・18時）
 - /usr/bin/python3 → Pythonの絶対パス
-- > /dev/null 2>&1 → cron のメール通知を抑制
 
 ※ 環境に応じてパスを変更してください。
 
@@ -69,6 +68,9 @@ python3 mail_forward.py
 ## 注意事項
 
 - メール送信元アドレスは config.json で指定した smtp.from_address になります
+  - 迷惑メール判定を避けるため、smtp.from_address には使用するSMTPサーバーと同じドメインのメールアドレスを指定してください。
+  - SPF や DMARC は送信元ドメインとSMTPサーバーの整合性を検証する仕組みで、
+一致していないと迷惑メールと判定される場合があります。
 - 元メールの差出人は本文および Reply-To ヘッダーに記載されます
 - config.json は公開しないでください
 - サーバー上では適切なファイルパーミッションを設定してください
