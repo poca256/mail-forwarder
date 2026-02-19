@@ -37,7 +37,7 @@ def decode_mime_header(value):
     decoded_string = ""
     for part, enc in decoded_parts:
         if isinstance(part, bytes):
-            decoded_string += part.decode(enc or "utf-8", errors="ignore")
+            decoded_string += part.decode(enc or "utf-8", errors="replace")
         else:
             decoded_string += part
     return decoded_string
@@ -83,13 +83,46 @@ Subject: {original_subject}
 
 """
 
-    body = original.get_body(preferencelist=("plain", "html"))
+    text_body = None
+    html_body = None
 
-    if body:
-        if body.get_content_type() == "text/plain":
-            new_msg.set_content(header_text + body.get_content())
-        elif body.get_content_type() == "text/html":
-            html_header = f"""
+    for part in original.walk():
+        if part.get_content_maintype() == "multipart":
+            continue
+        if part.get_content_disposition() == "attachment":
+            continue
+
+        content_type = part.get_content_type()
+
+        if content_type == "text/html":
+            payload = part.get_payload(decode=True)
+            if payload:
+                charset = part.get_content_charset() or "utf-8"
+                html_body = payload.decode(charset, errors="replace")
+
+        elif content_type == "text/plain" and html_body is None:
+            payload = part.get_payload(decode=True)
+            if payload:
+                charset = part.get_content_charset() or "utf-8"
+                text_body = payload.decode(charset, errors="replace")
+
+    plain_text = header_text
+    if text_body:
+        plain_text += text_body
+    elif html_body:
+        plain_text += html_body
+    else:
+        plain_text += "(No body)"
+
+    new_msg.set_content(
+        plain_text,
+        subtype="plain",
+        charset="utf-8",
+        cte="8bit"
+    )
+
+    if html_body:
+        html_header = f"""
 <hr>
 <b>----- Forwarded Message -----</b><br>
 <b>From:</b> {original_from}<br>
@@ -97,9 +130,12 @@ Subject: {original_subject}
 <b>Subject:</b> {original_subject}<br>
 <hr>
 """
-            new_msg.add_alternative(html_header + body.get_content(), subtype="html")
-    else:
-        new_msg.set_content(header_text + "(No body)")
+        new_msg.add_alternative(
+            html_header + html_body,
+            subtype="html",
+            charset="utf-8",
+            cte="8bit"
+        )
 
     for part in original.iter_attachments():
         try:
