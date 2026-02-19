@@ -11,6 +11,14 @@ A simple multi-account IMAP mail forwarder written in Python.
 - ログローテーション（5MB × 5世代）
 - Python標準ライブラリのみ使用
 
+## Changelog
+
+### [1.1.0] 2026-02-19
+- Fixed
+  - Prevent Gmail body mojibake by forcing 8bit encoding
+  - Proper HTML priority multipart parsing
+  - Multipart / mineo nested multipart fix
+
 ---
 
 ## 動作要件
