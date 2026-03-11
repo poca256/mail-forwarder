@@ -13,6 +13,11 @@ A simple multi-account IMAP mail forwarder written in Python.
 
 ## Changelog
 
+### [1.2.0] 2026-03-11
+- Fixed
+  - Optimized for Gmail
+  - Automatic Sender Name in Subject
+
 ### [1.1.0] 2026-02-19
 - Fixed
   - Prevent Gmail body mojibake by forcing 8bit encoding
