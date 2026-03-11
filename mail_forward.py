@@ -8,6 +8,7 @@ import ssl
 import json
 import logging
 import os
+import email.utils
 from email import policy
 from email.message import EmailMessage
 from email.header import decode_header
@@ -23,11 +24,12 @@ LOG_FILE = os.path.join(LOG_DIR, "mail_forward.log")
 def setup_logger():
     logger = logging.getLogger("mail_forward")
     logger.setLevel(logging.INFO)
-    handler = RotatingFileHandler(LOG_FILE, maxBytes=5*1024*1024, backupCount=5)
-    formatter = logging.Formatter("%(asctime)s %(levelname)s: %(message)s")
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    logger.addHandler(logging.StreamHandler())
+    if not logger.handlers:
+        handler = RotatingFileHandler(LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=5)
+        formatter = logging.Formatter("%(asctime)s %(levelname)s: %(message)s")
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        logger.addHandler(logging.StreamHandler())
     return logger
 
 def decode_mime_header(value):
@@ -57,110 +59,91 @@ def save_uid_state(state):
         json.dump(state, f, indent=2)
 
 def forward_email(raw_msg, config, logger):
-    original = email.message_from_bytes(raw_msg, policy=policy.default)
+    my_policy = policy.default.clone(utf8=True)
+    original = email.message_from_bytes(raw_msg, policy=my_policy)
 
-    original_from = decode_mime_header(original.get("From", ""))
-    original_subject = decode_mime_header(original.get("Subject", "(No Subject)"))
+    from_raw = original.get("From", "")
+    parsed_name, parsed_addr = email.utils.parseaddr(from_raw)    
+    decoded_name = decode_mime_header(parsed_name)
+    
+    if decoded_name:
+        original_from = f"{decoded_name} (Email: {parsed_addr})"
+    else:
+        original_from = parsed_addr
+
+    original_subject = decode_mime_header(original.get("Subject", "(No Subject)"))    
+    if decoded_name:
+        new_subject = f"[{decoded_name}] {original_subject}"
+    else:
+        new_subject = f"[AUTO-FWD] {original_subject}"
+
+    original_to = decode_mime_header(original.get("To", ""))
     original_date = original.get("Date", "")
 
-    SMTP_SERVER = config["smtp"]["server"]
-    SMTP_PORT = config["smtp"]["port"]
-    SMTP_AUTH_USER = config["smtp"]["auth_user"]
-    SMTP_AUTH_PASSWORD = config["smtp"]["auth_password"]
-    SMTP_FROM = config["smtp"]["from_address"]
-    FORWARD_TO = config["forward_to"]
-
-    new_msg = EmailMessage()
-    new_msg["From"] = SMTP_FROM
-    new_msg["To"] = FORWARD_TO
-    new_msg["Subject"] = f"[AUTO-FWD] {original_subject}"
+    new_msg = EmailMessage(policy=my_policy)
+    new_msg["From"] = config["smtp"]["from_address"]
+    new_msg["To"] = config["forward_to"]
+    new_msg["Subject"] = new_subject
     new_msg["Reply-To"] = original_from
 
-    header_text = f"""----- Forwarded Message -----
-From: {original_from}
-Date: {original_date}
-Subject: {original_subject}
+    # --- Body extraction with fallback ---
+    plain_part = original.get_body(preferencelist=('plain'))
+    if not plain_part and original.is_multipart():
+        for part in original.walk():
+            if part.get_content_type() == "text/plain":
+                plain_part = part
+                break
 
-"""
+    html_part = original.get_body(preferencelist=('html'))
+    if not html_part and original.is_multipart():
+        for part in original.walk():
+            if part.get_content_type() == "text/html":
+                html_part = part
+                break
 
-    text_body = None
-    html_body = None
+    # Header text with From (includes address), To, Date, Subject
+    header_text = f"----- Forwarded Message -----\nFrom: {original_from}\nTo: {original_to}\nDate: {original_date}\nSubject: {original_subject}\n\n"
 
-    for part in original.walk():
-        if part.get_content_maintype() == "multipart":
-            continue
-        if part.get_content_disposition() == "attachment":
-            continue
-
-        content_type = part.get_content_type()
-
-        if content_type == "text/html":
-            payload = part.get_payload(decode=True)
-            if payload:
-                charset = part.get_content_charset() or "utf-8"
-                html_body = payload.decode(charset, errors="replace")
-
-        elif content_type == "text/plain" and html_body is None:
-            payload = part.get_payload(decode=True)
-            if payload:
-                charset = part.get_content_charset() or "utf-8"
-                text_body = payload.decode(charset, errors="replace")
-
-    plain_text = header_text
-    if text_body:
-        plain_text += text_body
-    elif html_body:
-        plain_text += html_body
+    # Set Plain Text (base64 for stability)
+    if plain_part:
+        new_msg.set_content(header_text + plain_part.get_content(), cte="base64")
     else:
-        plain_text += "(No body)"
+        new_msg.set_content(header_text + "(No plain text body)", cte="base64")
 
-    new_msg.set_content(
-        plain_text,
-        subtype="plain",
-        charset="utf-8",
-        cte="8bit"
-    )
-
-    if html_body:
+    # Set HTML (base64 for stability)
+    if html_part:
         html_header = f"""
-<hr>
-<b>----- Forwarded Message -----</b><br>
-<b>From:</b> {original_from}<br>
-<b>Date:</b> {original_date}<br>
-<b>Subject:</b> {original_subject}<br>
-<hr>
+<div style="border-bottom: 1px solid #ccc; margin-bottom: 10px; padding-bottom: 10px;">
+  <b>----- Forwarded Message -----</b><br>
+  <b>From:</b> {original_from}<br>
+  <b>To:</b> {original_to}<br>
+  <b>Date:</b> {original_date}<br>
+  <b>Subject:</b> {original_subject}
+</div>
 """
-        new_msg.add_alternative(
-            html_header + html_body,
-            subtype="html",
-            charset="utf-8",
-            cte="8bit"
+        new_msg.add_alternative(html_header + html_part.get_content(), subtype="html", cte="base64")
+
+    # Attachments
+    for part in original.iter_attachments():
+        new_msg.add_attachment(
+            part.get_content(),
+            maintype=part.get_content_maintype(),
+            subtype=part.get_content_subtype(),
+            filename=part.get_filename()
         )
 
-    for part in original.iter_attachments():
-        try:
-            new_msg.add_attachment(
-                part.get_content(),
-                maintype=part.get_content_maintype(),
-                subtype=part.get_content_subtype(),
-                filename=part.get_filename()
-            )
-        except Exception as e:
-            logger.error(f"Attachment error: {e}")
-
+    # --- Send ---
     context = ssl.create_default_context()
-    use_ssl = config["smtp"].get("use_ssl", True)
-
-    if use_ssl:
-        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=context) as server:
-            server.login(SMTP_AUTH_USER, SMTP_AUTH_PASSWORD)
+    smtp_cfg = config["smtp"]
+    
+    if smtp_cfg.get("use_ssl", True):
+        with smtplib.SMTP_SSL(smtp_cfg["server"], smtp_cfg["port"], context=context) as server:
+            server.login(smtp_cfg["auth_user"], smtp_cfg["auth_password"])
             server.send_message(new_msg)
     else:
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.ehlo()
+        with smtplib.SMTP(smtp_cfg["server"], smtp_cfg["port"]) as server:
             server.starttls(context=context)
-            server.ehlo()
-            server.login(SMTP_AUTH_USER, SMTP_AUTH_PASSWORD)
+            server.login(smtp_cfg["auth_user"], smtp_cfg["auth_password"])
             server.send_message(new_msg)
 
     logger.info(f"Forwarded: {original_subject}")
@@ -198,6 +181,8 @@ def process_imap_account(account, config, uid_state, logger):
 
     last_uid = uid_state[user]
     new_uids = [uid for uid in all_uids if uid > last_uid]
+    # --- For testing: Process only the single latest email ---
+    #new_uids = [max(all_uids)]
 
     if not new_uids:
         mail.logout()
